@@ -225,7 +225,8 @@ public class ScreenContainer<T extends ScreenFragment> extends ViewGroup {
           }
         }
       });
-      mCurrentTransaction.commitAllowingStateLoss();
+//      Changed to sync implement to prevent "No view found for id for fragment ScreenFragment"
+      mCurrentTransaction.commitNowAllowingStateLoss();
       mCurrentTransaction = null;
     }
   }
