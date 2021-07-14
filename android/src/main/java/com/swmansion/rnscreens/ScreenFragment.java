@@ -19,9 +19,17 @@ import java.util.List;
 
 public class ScreenFragment extends Fragment {
 
+  public enum ScreenLifecycleEvent {
+    Appear,
+    WillAppear,
+    Disappear,
+    WillDisappear,
+  }
+
   protected Screen mScreenView;
   private final List<ScreenContainer> mChildScreenContainers = new ArrayList<>();
   private boolean shouldUpdateOnResume = false;
+  private float mProgress;
 
   public ScreenFragment() {
     throw new IllegalStateException(
@@ -32,6 +40,9 @@ public class ScreenFragment extends Fragment {
   public ScreenFragment(Screen screenView) {
     super();
     mScreenView = screenView;
+    // if we don't set it, it will be 0.0f at the beginning so the progress will not be sent
+    // due to progress value being already 0.0f
+    mProgress = -1f;
   }
 
   protected static View recycleView(View view) {
@@ -140,12 +151,9 @@ public class ScreenFragment extends Fragment {
         .getEventDispatcher()
         .dispatchEvent(new ScreenWillAppearEvent(mScreenView.getId()));
 
-    for (ScreenContainer sc : mChildScreenContainers) {
-      if (sc.getScreenCount() > 0) {
-        Screen topScreen = sc.getScreenAt(sc.getScreenCount() - 1);
-        topScreen.getFragment().dispatchOnWillAppear();
-      }
-    }
+    dispatchEventInChildContainers(ScreenLifecycleEvent.WillAppear);
+
+    dispatchTransitionProgress(0.0f, false);
   }
 
   protected void dispatchOnAppear() {
@@ -154,12 +162,9 @@ public class ScreenFragment extends Fragment {
         .getEventDispatcher()
         .dispatchEvent(new ScreenAppearEvent(mScreenView.getId()));
 
-    for (ScreenContainer sc : mChildScreenContainers) {
-      if (sc.getScreenCount() > 0) {
-        Screen topScreen = sc.getScreenAt(sc.getScreenCount() - 1);
-        topScreen.getFragment().dispatchOnAppear();
-      }
-    }
+    dispatchEventInChildContainers(ScreenLifecycleEvent.Appear);
+
+    dispatchTransitionProgress(1.0f, false);
   }
 
   protected void dispatchOnWillDisappear() {
@@ -168,12 +173,9 @@ public class ScreenFragment extends Fragment {
         .getEventDispatcher()
         .dispatchEvent(new ScreenWillDisappearEvent(mScreenView.getId()));
 
-    for (ScreenContainer sc : mChildScreenContainers) {
-      if (sc.getScreenCount() > 0) {
-        Screen topScreen = sc.getScreenAt(sc.getScreenCount() - 1);
-        topScreen.getFragment().dispatchOnWillDisappear();
-      }
-    }
+    dispatchEventInChildContainers(ScreenLifecycleEvent.WillDisappear);
+
+    dispatchTransitionProgress(0.0f, true);
   }
 
   protected void dispatchOnDisappear() {
@@ -182,11 +184,64 @@ public class ScreenFragment extends Fragment {
         .getEventDispatcher()
         .dispatchEvent(new ScreenDisappearEvent(mScreenView.getId()));
 
+    dispatchEventInChildContainers(ScreenLifecycleEvent.Disappear);
+
+    dispatchTransitionProgress(1.0f, true);
+  }
+
+  protected void dispatchTransitionProgress(float alpha, boolean closing) {
+    boolean goingForward = false;
+    if (getScreen().getContainer() instanceof ScreenStack) {
+      goingForward = ((ScreenStack) getScreen().getContainer()).isGoingForward();
+    }
+    sendTransitionProgressEvent(alpha, closing, goingForward);
+  }
+
+  protected void sendTransitionProgressEvent(float alpha, boolean closing, boolean goingForward) {
+    if (mProgress != alpha) {
+      mProgress = Math.max(0.0f, Math.min(1.0f, alpha));
+      /* We want value of 0 and 1 to be always dispatched so we base coalescing key on the progress:
+         - progress is 0 -> key 1
+         - progress is 1 -> key 2
+         - progress is between 0 and 1 -> key 3
+      */
+      short coalescingKey = (short) (mProgress == 0.0f ? 1 : mProgress == 1.0f ? 2 : 3);
+      ((ReactContext) mScreenView.getContext())
+          .getNativeModule(UIManagerModule.class)
+          .getEventDispatcher()
+          .dispatchEvent(
+              new ScreenTransitionProgressEvent(
+                  mScreenView.getId(), mProgress, closing, goingForward, coalescingKey));
+    }
+  }
+
+  private void dispatchEventInChildContainers(ScreenLifecycleEvent event) {
     for (ScreenContainer sc : mChildScreenContainers) {
       if (sc.getScreenCount() > 0) {
-        Screen topScreen = sc.getScreenAt(sc.getScreenCount() - 1);
-        topScreen.getFragment().dispatchOnDisappear();
+        Screen topScreen = sc.getTopScreen();
+        if (topScreen != null && topScreen.getFragment() != null) {
+          dispatchEvent(event, topScreen.getFragment());
+        }
       }
+    }
+  }
+
+  private void dispatchEvent(ScreenLifecycleEvent event, ScreenFragment fragment) {
+    switch (event) {
+      case Appear:
+        fragment.dispatchOnAppear();
+        break;
+      case WillAppear:
+        fragment.dispatchOnWillAppear();
+        break;
+      case Disappear:
+        fragment.dispatchOnDisappear();
+        break;
+      case WillDisappear:
+        fragment.dispatchOnWillDisappear();
+        break;
+      default:
+        break;
     }
   }
 
